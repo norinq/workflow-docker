@@ -1,0 +1,93 @@
+name: CheckDebian
+on:
+  workflow_call:
+    outputs:
+      source_tag:
+        description: "Latest v* tag of this repo (or default branch as fallback)"
+        value: ${{ jobs.checkdebian.outputs.source_tag }}
+      debian_snapshot:
+        description: "Latest Debian docker snapshot tag, e.g. trixie-20261001"
+        value: ${{ jobs.checkdebian.outputs.debian_snapshot }}
+      latest_snapshot:
+        description: "<source_tag>-<debian_snapshot>"
+        value: ${{ jobs.checkdebian.outputs.latest_snapshot }}
+      latest_version:
+        description: "<source_tag>-<debian_version>"
+        value: ${{ jobs.checkdebian.outputs.latest_version }}
+      latest_major:
+        description: "<source_tag>-<debian_major>"
+        value: ${{ jobs.checkdebian.outputs.latest_major }}
+      latest_codename:
+        description: "<source_tag>-<debian_codename>"
+        value: ${{ jobs.checkdebian.outputs.latest_codename }}
+      exists:
+        description: "Whether latest_snapshot already exists in GHCR ('true'/'false')"
+        value: ${{ jobs.checkdebian.outputs.exists }}
+
+
+permissions:
+  packages: read
+  contents: read
+
+jobs:
+  checkdebian:
+    name: CheckDebian
+    runs-on: ubuntu-latest
+    outputs:
+      source_tag: ${{ steps.tags.outputs.source_tag }}  # ex v1.0.0
+      debian_snapshot: ${{ steps.tags.outputs.debian_snapshot }} # ex trixie-20010101
+      latest_snapshot: ${{ steps.tags.outputs.latest_snapshot }} # ex v1.0.0-trixie-20010101
+      latest_version: ${{ steps.tags.outputs.latest_version }} # ex v1.0.0-12.9
+      latest_major: ${{ steps.tags.outputs.latest_major }} # ex v1.0.0-12
+      latest_codename: ${{ steps.tags.outputs.latest_codename }} # ex v1.0.0-trixie
+      exists: ${{ steps.check.outputs.exists }}
+    steps:
+      - name: tags
+        id: tags
+        run: |
+          set -e -o pipefail
+
+          debian_release=$(curl -fsSL https://deb.debian.org/debian/dists/stable/Release)
+          debian_version=$(echo "$debian_release" | awk -F': ' '/^Version:/ {print $2}')
+          debian_codename=$(echo "$debian_release" | awk -F': ' '/^Codename:/ {print $2}')
+          debian_version_major=${debian_version%%.*}
+
+          debian_snapshot=$(curl -fsSL "https://registry.hub.docker.com/v2/repositories/library/debian/tags?page_size=100" |
+            jq -r '.results[].name' |
+            grep "^${debian_codename}-[0-9]\+$" |
+            sort -Vr |
+            head -n1)
+          if [ -z "$debian_snapshot" ]; then
+            echo "No docker snapshot tag found for ${debian_codename}"
+            exit 1
+          fi
+
+          source_tag=$(curl -fsSL -H "Accept: application/vnd.github+json" -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            https://api.github.com/repos/${{ github.repository }}/tags?per_page=100 |
+            jq -r '.[].name |
+            select(startswith("v"))' |
+            head -n 1)
+          if [ -z "$source_tag" ]; then
+            source_tag=${{ github.event.repository.default_branch }}
+            echo "WARNING: No tag found, using '${source_tag}' as fallback" >&2
+          fi
+
+          echo "source_tag=${source_tag}" >> $GITHUB_OUTPUT
+          echo "debian_snapshot=${debian_snapshot}" >> $GITHUB_OUTPUT
+          echo "latest_snapshot=${source_tag}-${debian_snapshot}" >> $GITHUB_OUTPUT
+          echo "latest_version=${source_tag}-${debian_version}" >> $GITHUB_OUTPUT
+          echo "latest_major=${source_tag}-${debian_version_major}" >> $GITHUB_OUTPUT
+          echo "latest_codename=${source_tag}-${debian_codename}" >> $GITHUB_OUTPUT
+      - name: Check if the tag exists in GHCR
+        id: check
+        env:
+          IMAGE: ghcr.io/${{ github.repository }}
+          TAG: ${{ steps.tags.outputs.latest_snapshot }}
+        run: |
+          if docker manifest inspect "${IMAGE}:${TAG}" > /dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "Tag ${{ steps.tags.outputs.latest_snapshot }} exists"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "Tag ${{ steps.tags.outputs.latest_snapshot }} do not exists"
+          fi

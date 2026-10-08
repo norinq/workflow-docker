@@ -1,0 +1,40 @@
+name: BuildImage
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 0 * * *'
+
+concurrency:
+  group: build
+  cancel-in-progress: false
+
+jobs:
+  precheck:
+    name: precheck
+    uses: norinq/workflow-docker/.github/workflows/check_debian.yaml@master
+    permissions:
+      packages: read
+      contents: read
+  checkshell:
+    name: checkshell
+    needs: precheck
+    uses: ./.github/workflows/check_shell.yaml
+    permissions:
+      contents: read
+  build:
+    name: build
+    needs: [precheck, checkshell]
+    uses: norinq/workflow-docker/.github/workflows/build_image.yaml@master
+    permissions:
+      actions: write
+      packages: write
+      contents: read
+    with:
+      source_tag: ${{ needs.precheck.outputs.source_tag }}
+      build-args: DEBIAN_SNAPSHOT=${{ needs.precheck.outputs.debian_snapshot }}
+      metadata_tags: |
+        type=raw,value=${{ needs.precheck.outputs.latest_snapshot }},priority=450
+        type=raw,value=${{ needs.precheck.outputs.latest_version }},priority=350
+        type=raw,value=${{ needs.precheck.outputs.latest_major }},priority=250
+        type=raw,value=${{ needs.precheck.outputs.latest_codename }},priority=150
+        type=raw,value=latest,priority=100
