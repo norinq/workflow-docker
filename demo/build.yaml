@@ -31,7 +31,7 @@ jobs:
       contents: read
     with:
       source_tag: ${{ needs.precheck.outputs.source_tag }}
-      build-args: DEBIAN_SNAPSHOT=${{ needs.precheck.outputs.debian_snapshot }}
+      build-args: DEBIAN_VERSION=${{ needs.precheck.outputs.debian_snapshot }}
       metadata_tags: |
         type=raw,value=${{ needs.precheck.outputs.latest_snapshot }},priority=450
         type=raw,value=${{ needs.precheck.outputs.latest_version }},priority=350
